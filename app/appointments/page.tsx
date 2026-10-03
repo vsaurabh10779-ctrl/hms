@@ -37,6 +37,7 @@ export default function AppointmentsPage() {
       columns={columns}
       fields={fields}
       initial={{ patientId: "", doctorId: "", date: "", notes: "" }}
+      rowLabel={(row) => `${row.patient} with ${row.doctor} on ${row.date}`}
     />
   );
 }

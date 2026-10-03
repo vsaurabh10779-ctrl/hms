@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+export type CrudRow = Record<string, any>;
 export type CrudOption = { value: string | number; label: string };
 export type CrudField = {
   name: string;
@@ -9,12 +10,12 @@ export type CrudField = {
   required?: boolean;
   type?: string;
   placeholder?: string;
-  options?: CrudOption[] | ((data: Record<string, any>) => CrudOption[]);
+  options?: CrudOption[] | ((data: CrudRow) => CrudOption[]);
 };
 export type CrudColumn = {
   key: string;
   label: string;
-  render?: (value: any, row: any) => React.ReactNode;
+  render?: (value: any, row: CrudRow) => React.ReactNode;
 };
 export type CrudProps = {
   title: string;
@@ -22,8 +23,9 @@ export type CrudProps = {
   endpoint: string;
   columns: CrudColumn[];
   fields: CrudField[];
-  initial: Record<string, any>;
+  initial: CrudRow;
   empty?: string;
+  rowLabel?: (row: CrudRow) => string;
 };
 
 export default function CrudPanel({
@@ -34,14 +36,21 @@ export default function CrudPanel({
   fields,
   initial = {},
   empty = "No records yet.",
+  rowLabel,
 }: CrudProps) {
-  const [rows, setRows] = useState<Record<string, any>[]>([]);
-  const [meta, setMeta] = useState<Record<string, any>>({});
-  const [form, setForm] = useState<Record<string, any>>({ ...initial });
+  const [rows, setRows] = useState<CrudRow[]>([]);
+  const [meta, setMeta] = useState<CrudRow>({});
+  const [form, setForm] = useState<CrudRow>({ ...initial });
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<CrudRow | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
+
+  const singular = title.split(" ").pop() || title;
+  const formOpen = open || Boolean(editing);
 
   const load = useCallback(async () => {
     const res = await fetch(endpoint);
@@ -71,12 +80,39 @@ export default function CrudPanel({
     setForm((f) => ({ ...f, [name]: value }));
   }
 
+  function resetForm() {
+    setForm({ ...initial });
+    setEditing(null);
+    setOpen(false);
+    setError("");
+  }
+
+  function startAdd() {
+    setError("");
+    setNotice("");
+    setEditing(null);
+    setForm({ ...initial });
+    setOpen((v) => !v);
+  }
+
+  function startEdit(row: CrudRow) {
+    setError("");
+    setNotice("");
+    const next: CrudRow = { ...initial };
+    fields.forEach((f) => {
+      if (row[f.name] !== undefined) next[f.name] = row[f.name];
+    });
+    setForm(next);
+    setEditing(row);
+    setOpen(true);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError("");
-    const res = await fetch(endpoint, {
-      method: "POST",
+    const res = await fetch(editing ? `${endpoint}/${editing.id}` : endpoint, {
+      method: editing ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
     });
@@ -86,9 +122,39 @@ export default function CrudPanel({
       setError(data.error || "Something went wrong");
       return;
     }
-    setForm({ ...initial });
-    setOpen(false);
+    setNotice(
+      editing
+        ? `${singular} updated successfully.`
+        : `${singular} added successfully.`
+    );
+    resetForm();
     load();
+  }
+
+  async function remove(row: CrudRow) {
+    const label = rowLabel ? rowLabel(row) : String(row.name ?? `record #${row.id}`);
+    if (!window.confirm(`Delete ${singular.toLowerCase()} "${label}"? This cannot be undone.`)) return;
+    setPendingDelete(row.id);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch(`${endpoint}/${row.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Could not delete record");
+        return;
+      }
+      const n = Number(data.appointments || 0);
+      setNotice(
+        n > 0
+          ? `${singular} deleted, along with ${n} linked appointment${n === 1 ? "" : "s"}.`
+          : `${singular} deleted.`
+      );
+      if (editing && editing.id === row.id) resetForm();
+      load();
+    } finally {
+      setPendingDelete(null);
+    }
   }
 
   return (
@@ -99,15 +165,31 @@ export default function CrudPanel({
           {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
         </div>
         <button
-          onClick={() => setOpen((v) => !v)}
+          onClick={formOpen ? resetForm : startAdd}
           className="rounded-full bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700"
         >
-          {open ? "Cancel" : "+ Add " + title.split(" ").pop()}
+          {formOpen ? "Cancel" : "+ Add " + singular}
         </button>
       </div>
 
-      {open && (
+      {notice && (
+        <p className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+          {notice}
+        </p>
+      )}
+
+      {formOpen && (
         <form onSubmit={submit} className="mb-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-bold text-slate-900">
+              {editing ? `Edit ${singular.toLowerCase()}` : `Add ${singular.toLowerCase()}`}
+            </h2>
+            {editing && (
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-500">
+                #{editing.id}
+              </span>
+            )}
+          </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {fields.map((f) => (
               <label key={f.name} className="block">
@@ -131,7 +213,7 @@ export default function CrudPanel({
                     type={f.type || "text"}
                     required={f.required}
                     value={form[f.name] ?? ""}
-                    onChange={(e) => set(f.name, f.type === "number" ? e.target.value : e.target.value)}
+                    onChange={(e) => set(f.name, e.target.value)}
                     placeholder={f.placeholder || ""}
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
                   />
@@ -140,12 +222,21 @@ export default function CrudPanel({
             ))}
           </div>
           {error && <p className="mt-4 text-sm font-medium text-red-600">{error}</p>}
-          <button
-            disabled={saving}
-            className="mt-6 rounded-full bg-slate-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              disabled={saving}
+              className="rounded-full bg-slate-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : editing ? "Save changes" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={resetForm}
+              className="rounded-full border border-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
       )}
 
@@ -162,6 +253,7 @@ export default function CrudPanel({
                   {columns.map((c) => (
                     <th key={c.key} className="px-4 py-3 font-semibold">{c.label}</th>
                   ))}
+                  <th className="px-4 py-3 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -172,6 +264,23 @@ export default function CrudPanel({
                         {c.render ? c.render(row[c.key], row) : String(row[c.key] ?? "—")}
                       </td>
                     ))}
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => startEdit(row)}
+                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-teal-400 hover:bg-teal-50 hover:text-teal-700"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => remove(row)}
+                          disabled={pendingDelete === row.id}
+                          className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-600 transition hover:border-rose-400 hover:bg-rose-50 disabled:opacity-50"
+                        >
+                          {pendingDelete === row.id ? "Deleting…" : "Delete"}
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>

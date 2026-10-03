@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { getAppointments, createAppointment, getPatients, getDoctors } from "@/lib/db";
+import {
+  getAppointments,
+  createAppointment,
+  getPatients,
+  getDoctors,
+  patientExists,
+  doctorExists,
+} from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +26,22 @@ export async function POST(req) {
   if (!patientId || !doctorId || !date) {
     return NextResponse.json({ error: "Patient, doctor and date are required" }, { status: 400 });
   }
-  const appointment = createAppointment({
-    patientId,
-    doctorId,
-    date,
-    status: "Scheduled",
-    notes: String(body.notes || ""),
-  });
-  return NextResponse.json({ appointment }, { status: 201 });
+  if (!patientExists(patientId)) {
+    return NextResponse.json({ error: "Selected patient does not exist" }, { status: 400 });
+  }
+  if (!doctorExists(doctorId)) {
+    return NextResponse.json({ error: "Selected doctor does not exist" }, { status: 400 });
+  }
+  try {
+    const appointment = createAppointment({
+      patientId,
+      doctorId,
+      date,
+      status: "Scheduled",
+      notes: String(body.notes || ""),
+    });
+    return NextResponse.json({ appointment }, { status: 201 });
+  } catch {
+    return NextResponse.json({ error: "Could not create appointment" }, { status: 500 });
+  }
 }
